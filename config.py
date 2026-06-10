@@ -1,7 +1,7 @@
 import os
 
 # ─── Токены ───────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8994569220:AAHlH3vTSMiD3H6sT6htUnxUnqEjhIQwtgs")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8611742410:AAHcNxvVvoCe7uEfv3POaw60hT6y0JpEHwA")
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "594195:AA8t5lFCdyEHCPp3qr5riSRjYjcKbfe9sv4")
 
 # ─── Твой Telegram ID (для уведомлений о заказах) ─────────────────────────────
