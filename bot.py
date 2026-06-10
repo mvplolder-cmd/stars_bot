@@ -164,7 +164,7 @@ async def receive_username(message: Message, state: FSMContext):
 
     await state.update_data(username=username)
 
-    amount_nanoton = int(pkg["ton"] * 1_000_000_000)
+    amount_nanoton = int(pkg["stars"])
     prices = [LabeledPrice(label=f"⭐ {pkg['stars']} Telegram Stars", amount=amount_nanoton)]
 
     await message.answer(
@@ -181,7 +181,7 @@ async def receive_username(message: Message, state: FSMContext):
         description=f"Покупка {pkg['stars']} Stars для {username} за {pkg['ton']} TON.",
         payload=f"stars_{pkg['id']}_{message.from_user.id}_{username.replace('@','')}",
         provider_token=PROVIDER_TOKEN,
-        currency="TON",
+        currency="XTR",
         prices=prices,
         start_parameter=f"buy_{pkg['id']}",
         photo_url="https://telegram.org/img/t_logo.png",
