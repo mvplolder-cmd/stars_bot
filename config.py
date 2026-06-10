@@ -1,19 +1,13 @@
 import os
 
 # ─── Токены ───────────────────────────────────────────────────────────────────
-# Получи токен у @BotFather
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8994569220:AAHlH3vTSMiD3H6sT6htUnxUnqEjhIQwtgs")
-
-# Токен провайдера платежей.
-# Для TON через @wallet или @CryptoBot — получи у них.
-# Если используешь нативные Telegram Stars (XTR) — оставь пустую строку "".
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "594195:AA8t5lFCdyEHCPp3qr5riSRjYjcKbfe9sv4")
 
+# ─── Твой Telegram ID (для уведомлений о заказах) ─────────────────────────────
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7098379286"))
+
 # ─── Пакеты звёзд ─────────────────────────────────────────────────────────────
-# stars  — количество звёзд Telegram
-# ton    — цена в TON (float)
-# usd    — примерная цена в USD (для отображения)
-# id     — уникальный идентификатор пакета (строка, без пробелов)
 STARS_PACKAGES = [
     {"id": "50",   "stars": 50,   "ton": 0.5,  "usd": "1.0"},
     {"id": "100",  "stars": 100,  "ton": 0.9,  "usd": "1.8"},
