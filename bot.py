@@ -1,13 +1,21 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, CallbackQuery
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config import BOT_TOKEN, PROVIDER_TOKEN, STARS_PACKAGES, ADMIN_ID
+
+from config import BOT_TOKEN
+from keyboards import (
+    main_menu_kb,
+    recipient_kb,
+    stars_amount_kb,
+    payment_method_kb,
+    confirm_kb,
+    cancel_kb,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,299 +25,313 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 
-# ─── Состояния ────────────────────────────────────────────────────────────────
+class BuyStarsFlow(StatesGroup):
+    waiting_for_recipient = State()
+    waiting_for_amount = State()
+    waiting_for_custom_amount = State()
+    waiting_for_payment = State()
+    confirming = State()
 
-class OrderStates(StatesGroup):
-    waiting_username = State()
+
+STAR_PRICES = {
+    50: 59,
+    100: 119,
+    150: 178,
+    250: 297,
+    350: 416,
+    500: 595,
+    750: 892,
+    1000: 1190,
+    1500: 1785,
+    2500: 2975,
+    5000: 5950,
+    10000: 11900,
+}
+
+PAYMENT_METHODS = {
+    "sbp_1": ("СБП [1]", 6.0),
+    "sbp": ("СБП", 8.0),
+    "card": ("Карта", 8.0),
+    "cryptobot": ("CryptoBot", 3.0),
+    "ton": ("TON", 0.0),
+    "lolzteam": ("LolzTeam", 4.0),
+    "usdt": ("USDT (TON)", 0.0),
+}
 
 
-# ─── /start ───────────────────────────────────────────────────────────────────
+# ─── /start ────────────────────────────────────────────────────────────────────
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⭐ Купить звёзды", callback_data="buy_stars")
-    builder.button(text="ℹ️ Как это работает", callback_data="how_it_works")
-    builder.adjust(1)
-
-    await message.answer(
-        "👋 <b>Добро пожаловать!</b>\n\n"
-        "Здесь ты можешь купить <b>Telegram Stars ⭐</b> за <b>TON 💎</b>.\n\n"
-        "Stars используются для:\n"
-        "• Поддержки авторов и ботов\n"
-        "• Покупки цифровых товаров\n"
-        "• Отправки реакций\n\n"
-        "Нажми кнопку ниже, чтобы выбрать пакет 👇",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
-    )
-
-
-# ─── Как работает ─────────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data == "how_it_works")
-async def how_it_works(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⭐ Купить звёзды", callback_data="buy_stars")
-    builder.button(text="◀️ Назад", callback_data="back_start")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "ℹ️ <b>Как это работает?</b>\n\n"
-        "1️⃣ Выбери нужный пакет звёзд\n"
-        "2️⃣ Введи свой Telegram username\n"
-        "3️⃣ Оплати через TON\n"
-        "4️⃣ Получи Stars в течение 5-10 минут ⏱\n\n"
-        "💎 <b>Оплата</b> — через CryptoBot (TON).\n"
-        "Твои данные защищены.\n\n"
-        "❓ Вопросы — /help",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
-    )
-    await callback.answer()
-
-
-# ─── Список пакетов ───────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data.in_({"buy_stars", "back_packages"}))
-async def show_packages(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    for pkg in STARS_PACKAGES:
-        label = f"⭐ {pkg['stars']} звёзд — {pkg['ton']} TON"
-        builder.button(text=label, callback_data=f"pkg_{pkg['id']}")
-    builder.button(text="◀️ Назад", callback_data="back_start")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "⭐ <b>Выбери пакет звёзд</b>\n\n"
-        + "\n".join(
-            f"• <b>{p['stars']} Stars</b> = {p['ton']} TON (~{p['usd']}$)"
-            for p in STARS_PACKAGES
+    await message.answer_photo(
+        photo="https://i.imgur.com/placeholder_main.jpg",  # замените на свой баннер
+        caption=(
+            "✨ *Добро пожаловать!*\n\n"
+            "🎁 Покупайте Звёзды, Premium и пополняйте баланс за пару кликов.\n\n"
+            "📦 Выдача товаров моментальна!"
         ),
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
+        parse_mode="Markdown",
+        reply_markup=main_menu_kb(),
+    )
+
+
+# ─── Главное меню ──────────────────────────────────────────────────────────────
+
+@dp.callback_query(F.data == "buy_stars")
+async def buy_stars_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BuyStarsFlow.waiting_for_recipient)
+    await callback.message.edit_caption(
+        caption=(
+            "✈️ Введите юзернейм кому отправить звёзды\n"
+            "*(пример: @username)*:"
+        ),
+        parse_mode="Markdown",
+        reply_markup=recipient_kb(),
     )
     await callback.answer()
 
 
-@dp.callback_query(F.data == "back_start")
-async def back_to_start(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "buy_premium")
+async def buy_premium(callback: CallbackQuery):
+    await callback.answer("🔜 Раздел Premium скоро будет доступен!", show_alert=True)
+
+
+@dp.callback_query(F.data == "buy_ton")
+async def buy_ton(callback: CallbackQuery):
+    await callback.answer("🔜 Раздел TON скоро будет доступен!", show_alert=True)
+
+
+@dp.callback_query(F.data == "buy_gift")
+async def buy_gift(callback: CallbackQuery):
+    await callback.answer("🔜 Раздел подарков скоро будет доступен!", show_alert=True)
+
+
+@dp.callback_query(F.data == "weekly_raffle")
+async def weekly_raffle(callback: CallbackQuery):
+    await callback.answer("🎰 Еженедельный розыгрыш скоро!", show_alert=True)
+
+
+@dp.callback_query(F.data == "create_check")
+async def create_check(callback: CallbackQuery):
+    await callback.answer("🧾 Функция чека скоро будет доступна!", show_alert=True)
+
+
+@dp.callback_query(F.data == "profile")
+async def profile(callback: CallbackQuery):
+    user = callback.from_user
+    await callback.message.edit_caption(
+        caption=(
+            f"👤 *Профиль*\n\n"
+            f"🆔 ID: `{user.id}`\n"
+            f"👤 Имя: {user.full_name}\n"
+            f"📛 Username: @{user.username or '—'}"
+        ),
+        parse_mode="Markdown",
+        reply_markup=cancel_kb("main_menu"),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "support")
+async def support(callback: CallbackQuery):
+    await callback.answer("💬 Поддержка: @support (замените на реальный контакт)", show_alert=True)
+
+
+@dp.callback_query(F.data == "main_menu")
+async def back_to_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⭐ Купить звёзды", callback_data="buy_stars")
-    builder.button(text="ℹ️ Как это работает", callback_data="how_it_works")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "👋 <b>Добро пожаловать!</b>\n\n"
-        "Здесь ты можешь купить <b>Telegram Stars ⭐</b> за <b>TON 💎</b>.\n\n"
-        "Stars используются для:\n"
-        "• Поддержки авторов и ботов\n"
-        "• Покупки цифровых товаров\n"
-        "• Отправки реакций\n\n"
-        "Нажми кнопку ниже, чтобы выбрать пакет 👇",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
+    await callback.message.edit_caption(
+        caption=(
+            "✨ *Добро пожаловать!*\n\n"
+            "🎁 Покупайте Звёзды, Premium и пополняйте баланс за пару кликов.\n\n"
+            "📦 Выдача товаров моментальна!"
+        ),
+        parse_mode="Markdown",
+        reply_markup=main_menu_kb(),
     )
     await callback.answer()
 
 
-# ─── Выбор пакета → запрос username ──────────────────────────────────────────
+# ─── Получатель ────────────────────────────────────────────────────────────────
 
-@dp.callback_query(F.data.startswith("pkg_"))
-async def ask_username(callback: CallbackQuery, state: FSMContext):
-    pkg_id = callback.data.replace("pkg_", "")
-    pkg = next((p for p in STARS_PACKAGES if p["id"] == pkg_id), None)
-
-    if not pkg:
-        await callback.answer("❌ Пакет не найден", show_alert=True)
-        return
-
-    await state.set_state(OrderStates.waiting_username)
-    await state.update_data(pkg_id=pkg_id)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="◀️ Назад", callback_data="back_packages")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        f"⭐ <b>Пакет: {pkg['stars']} Stars за {pkg['ton']} TON</b>\n\n"
-        "📝 Введи свой <b>Telegram username</b> куда отправить звёзды:\n\n"
-        "Пример: <code>@username</code>",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
-    )
-    await callback.answer()
+@dp.callback_query(F.data == "recipient_self", BuyStarsFlow.waiting_for_recipient)
+async def recipient_self(callback: CallbackQuery, state: FSMContext):
+    username = f"@{callback.from_user.username}" if callback.from_user.username else f"ID:{callback.from_user.id}"
+    await state.update_data(recipient=username)
+    await _show_star_amounts(callback, state, username)
 
 
-# ─── Получение username → инвойс ─────────────────────────────────────────────
-
-@dp.message(OrderStates.waiting_username)
-async def receive_username(message: Message, state: FSMContext):
+@dp.message(BuyStarsFlow.waiting_for_recipient)
+async def recipient_entered(message: Message, state: FSMContext):
     username = message.text.strip()
-
-    # Нормализуем — убираем @ если есть
     if not username.startswith("@"):
         username = "@" + username
+    await state.update_data(recipient=username)
 
+    # отправляем новое сообщение с выбором количества
+    sent = await message.answer_photo(
+        photo="https://i.imgur.com/placeholder_stars.jpg",
+        caption=_stars_caption(username),
+        parse_mode="Markdown",
+        reply_markup=stars_amount_kb(),
+    )
+    await state.update_data(bot_msg_id=sent.message_id)
+    await state.set_state(BuyStarsFlow.waiting_for_amount)
+
+
+async def _show_star_amounts(callback: CallbackQuery, state: FSMContext, username: str):
+    await state.set_state(BuyStarsFlow.waiting_for_amount)
+    await callback.message.edit_caption(
+        caption=_stars_caption(username),
+        parse_mode="Markdown",
+        reply_markup=stars_amount_kb(),
+    )
+    await callback.answer()
+
+
+def _stars_caption(username: str) -> str:
+    return (
+        f"👤 Получатель: *{username}*\n\n"
+        "🌟 Выберите кол-во звёзд для покупки или укажите своё:"
+    )
+
+
+# ─── Количество звёзд ──────────────────────────────────────────────────────────
+
+@dp.callback_query(F.data.startswith("stars_"), BuyStarsFlow.waiting_for_amount)
+async def stars_selected(callback: CallbackQuery, state: FSMContext):
+    amount = int(callback.data.replace("stars_", ""))
     data = await state.get_data()
-    pkg_id = data.get("pkg_id")
-    pkg = next((p for p in STARS_PACKAGES if p["id"] == pkg_id), None)
+    recipient = data["recipient"]
+    price = STAR_PRICES[amount]
 
-    if not pkg:
-        await message.answer("❌ Ошибка. Начни заново — /start")
-        await state.clear()
+    await state.update_data(amount=amount, price=price)
+    await state.set_state(BuyStarsFlow.waiting_for_payment)
+
+    await callback.message.edit_caption(
+        caption=(
+            f"Вы покупаете *{amount}* ⭐ для *{recipient}*\n\n"
+            "💳 Выберите счёт для оплаты:"
+        ),
+        parse_mode="Markdown",
+        reply_markup=payment_method_kb(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "custom_amount", BuyStarsFlow.waiting_for_amount)
+async def custom_amount(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BuyStarsFlow.waiting_for_custom_amount)
+    await callback.message.edit_caption(
+        caption="✏️ Введите нужное количество звёзд (минимум 50):",
+        reply_markup=cancel_kb("main_menu"),
+    )
+    await callback.answer()
+
+
+@dp.message(BuyStarsFlow.waiting_for_custom_amount)
+async def custom_amount_entered(message: Message, state: FSMContext):
+    try:
+        amount = int(message.text.strip())
+        if amount < 50:
+            await message.answer("❌ Минимум 50 звёзд. Введите другое число:")
+            return
+    except ValueError:
+        await message.answer("❌ Введите корректное число:")
         return
 
-    await state.update_data(username=username)
+    # считаем цену (~1.19 руб за звезду)
+    price = round(amount * 1.19)
+    data = await state.get_data()
+    recipient = data["recipient"]
 
-    amount_nanoton = int(pkg["stars"])
-    prices = [LabeledPrice(label=f"⭐ {pkg['stars']} Telegram Stars", amount=amount_nanoton)]
+    await state.update_data(amount=amount, price=price)
+    await state.set_state(BuyStarsFlow.waiting_for_payment)
 
-    await message.answer(
-        f"✅ Username: <b>{username}</b>\n"
-        f"⭐ Пакет: <b>{pkg['stars']} Stars</b>\n"
-        f"💎 Цена: <b>{pkg['ton']} TON</b>\n\n"
-        "Оплати счёт ниже 👇",
-        parse_mode="HTML"
+    await message.answer_photo(
+        photo="https://i.imgur.com/placeholder_stars.jpg",
+        caption=(
+            f"Вы покупаете *{amount}* ⭐ для *{recipient}*\n\n"
+            "💳 Выберите счёт для оплаты:"
+        ),
+        parse_mode="Markdown",
+        reply_markup=payment_method_kb(),
     )
 
-    await bot.send_invoice(
-        chat_id=message.chat.id,
-        title=f"⭐ {pkg['stars']} Telegram Stars",
-        description=f"Покупка {pkg['stars']} Stars для {username} за {pkg['ton']} TON.",
-        payload=f"stars_{pkg['id']}_{message.from_user.id}_{username.replace('@','')}",
-        provider_token=PROVIDER_TOKEN,
-        currency="XTR",
-        prices=prices,
-        start_parameter=f"buy_{pkg['id']}",
-        photo_url="https://telegram.org/img/t_logo.png",
-        photo_width=100,
-        photo_height=100,
-        need_name=False,
-        need_email=False,
-        need_phone_number=False,
-        is_flexible=False,
+
+# ─── Способ оплаты ─────────────────────────────────────────────────────────────
+
+@dp.callback_query(F.data.startswith("pay_"), BuyStarsFlow.waiting_for_payment)
+async def payment_selected(callback: CallbackQuery, state: FSMContext):
+    method_key = callback.data.replace("pay_", "")
+    method_name, fee_pct = PAYMENT_METHODS[method_key]
+    data = await state.get_data()
+
+    amount = data["amount"]
+    base_price = data["price"]
+    recipient = data["recipient"]
+    final_price = round(base_price * (1 + fee_pct / 100), 2)
+
+    await state.update_data(method=method_name, final_price=final_price)
+    await state.set_state(BuyStarsFlow.confirming)
+
+    await callback.message.edit_caption(
+        caption=(
+            f"🔒 *Счёт {method_name}*\n\n"
+            f"👤 Получатель: *{recipient}*\n"
+            f"🎁 Товар: *{amount}* ⭐\n"
+            f"💰 Сумма: *{final_price}₽*\n\n"
+            "❗ После успешной оплаты бот автоматически обработает ваш заказ"
+        ),
+        parse_mode="Markdown",
+        reply_markup=confirm_kb(),
     )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "confirm_pay", BuyStarsFlow.confirming)
+async def confirm_payment(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    # TODO: здесь интеграция с реальным платёжным шлюзом
+    await callback.answer("✅ Заказ принят! (тестовый режим)", show_alert=True)
     await state.clear()
 
-
-# ─── Pre-checkout ─────────────────────────────────────────────────────────────
-
-@dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_query: PreCheckoutQuery):
-    await pre_checkout_query.answer(ok=True)
-
-
-# ─── Успешная оплата ──────────────────────────────────────────────────────────
-
-@dp.message(F.successful_payment)
-async def successful_payment(message: Message):
-    payment = message.successful_payment
-    payload = payment.invoice_payload
-    # payload = "stars_{pkg_id}_{user_id}_{username}"
-    parts = payload.split("_")
-
-    pkg_id = parts[1] if len(parts) > 1 else "?"
-    buyer_username = parts[3] if len(parts) > 3 else "?"
-
-    pkg = next((p for p in STARS_PACKAGES if p["id"] == pkg_id), None)
-    stars = pkg["stars"] if pkg else "?"
-
-    buyer = message.from_user
-    buyer_name = f"@{buyer.username}" if buyer.username else buyer.full_name
-
-    logger.info(f"✅ Оплата: {buyer.id} | {stars} stars → @{buyer_username} | charge={payment.telegram_payment_charge_id}")
-
-    # ─── Уведомление покупателю ───────────────────────────────────────────────
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⭐ Купить ещё", callback_data="buy_stars")
-
-    await message.answer(
-        f"✅ <b>Оплата прошла успешно!</b>\n\n"
-        f"⭐ <b>{stars} Stars</b> будут отправлены на <b>@{buyer_username}</b>\n"
-        f"⏱ Ожидай — обычно до 10 минут\n\n"
-        f"🧾 ID транзакции:\n<code>{payment.telegram_payment_charge_id}</code>\n\n"
-        f"Спасибо за покупку! 🎉",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
-    )
-
-    # ─── Уведомление админу ───────────────────────────────────────────────────
-    admin_builder = InlineKeyboardBuilder()
-    admin_builder.button(text="✅ Отправлено", callback_data=f"done_{message.from_user.id}_{buyer_username}_{stars}")
-    admin_builder.adjust(1)
-
-    await bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            f"🔔 <b>Новый заказ!</b>\n\n"
-            f"👤 Покупатель: {buyer_name} (<code>{buyer.id}</code>)\n"
-            f"📨 Отправить на: <b>@{buyer_username}</b>\n"
-            f"⭐ Количество: <b>{stars} Stars</b>\n"
-            f"💎 Сумма: <b>{pkg['ton'] if pkg else '?'} TON</b>\n\n"
-            f"🧾 Charge ID: <code>{payment.telegram_payment_charge_id}</code>\n\n"
-            f"➡️ Зайди на fragment.com и отправь звёзды на @{buyer_username}"
+    await callback.message.edit_caption(
+        caption=(
+            "✅ *Заказ успешно создан!*\n\n"
+            f"⭐ {data['amount']} звёзд для {data['recipient']}\n"
+            f"💳 Способ оплаты: {data['method']}\n"
+            f"💰 Сумма: {data['final_price']}₽\n\n"
+            "📦 Выдача будет произведена автоматически после оплаты."
         ),
-        parse_mode="HTML",
-        reply_markup=admin_builder.as_markup()
+        parse_mode="Markdown",
+        reply_markup=cancel_kb("main_menu"),
     )
 
 
-# ─── Админ: кнопка "Отправлено" ───────────────────────────────────────────────
+# ─── Отмена ────────────────────────────────────────────────────────────────────
 
-@dp.callback_query(F.data.startswith("done_"))
-async def order_done(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("❌ Нет доступа", show_alert=True)
-        return
-
-    parts = callback.data.split("_")
-    buyer_id = int(parts[1]) if len(parts) > 1 else None
-    username = parts[2] if len(parts) > 2 else "?"
-    stars = parts[3] if len(parts) > 3 else "?"
-
-    # Уведомить покупателя
-    if buyer_id:
-        try:
-            await bot.send_message(
-                chat_id=buyer_id,
-                text=(
-                    f"🎉 <b>Звёзды отправлены!</b>\n\n"
-                    f"⭐ <b>{stars} Stars</b> отправлены на @{username}\n\n"
-                    f"Спасибо за покупку! Если есть вопросы — /help"
-                ),
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Не удалось уведомить покупателя {buyer_id}: {e}")
-
-    await callback.message.edit_text(
-        callback.message.text + f"\n\n✅ <b>ВЫПОЛНЕНО</b> — уведомление отправлено @{username}",
-        parse_mode="HTML"
+@dp.callback_query(F.data == "cancel")
+async def cancel_action(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_caption(
+        caption=(
+            "✨ *Добро пожаловать!*\n\n"
+            "🎁 Покупайте Звёзды, Premium и пополняйте баланс за пару кликов.\n\n"
+            "📦 Выдача товаров моментальна!"
+        ),
+        parse_mode="Markdown",
+        reply_markup=main_menu_kb(),
     )
-    await callback.answer("✅ Покупатель уведомлён!")
+    await callback.answer("❌ Отменено")
 
 
-# ─── /help ────────────────────────────────────────────────────────────────────
-
-@dp.message(Command("help"))
-async def cmd_help(message: Message):
-    await message.answer(
-        "🆘 <b>Помощь</b>\n\n"
-        "/start — главное меню\n"
-        "/help — эта справка\n\n"
-        "По вопросам пиши: @fyhjollyy",
-        parse_mode="HTML"
-    )
-
-
-# ─── Запуск ───────────────────────────────────────────────────────────────────
+# ─── Запуск ────────────────────────────────────────────────────────────────────
 
 async def main():
-    logger.info("🤖 Бот запущен")
-    await dp.start_polling(bot)
+    logger.info("Бот запущен ✅")
+    await dp.start_polling(bot, skip_updates=True)
 
 
 if __name__ == "__main__":
