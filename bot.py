@@ -1,15 +1,21 @@
 import logging
 import asyncio
+import sys
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Токен твоего бота (получи у @BotFather)
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+
+# Токен бота
 BOT_TOKEN = "8611742410:AAHcNxvVvoCe7uEfv3POaw60hT6y0JpEHwA"
-# ID администратора, которому будут приходить уведомления о новых оплатах по номеру
-# Обновленный ID супергруппы (из ошибки: -1003792567158)
 ADMIN_ID = -1003792567158
 
 # Реквизиты для оплаты
@@ -19,13 +25,10 @@ PAYMENT_BANK = "Сбербанк (Лиза Ш.)"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Состояния для оформления заказа
 class OrderState(StatesGroup):
     waiting_for_username = State()
     waiting_for_amount = State()
     waiting_for_payment_confirm = State()
-
-# --- КЛАВИАТУРЫ ---
 
 def main_menu_kb():
     builder = InlineKeyboardBuilder()
@@ -58,8 +61,6 @@ def confirm_payment_kb():
     builder.row(types.InlineKeyboardButton(text="✅ Я оплатил(а)", callback_data="payment_done"))
     builder.row(types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
     return builder.as_markup()
-
-# --- ХЕНДЛЕРЫ ---
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
@@ -107,7 +108,7 @@ async def process_amount(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="Markdown"
     )
 
-@dp.callback_query(OrderState.waiting_for_amount, F.data == "pay_sber")
+@dp.callback_query(F.data == "pay_sber")
 async def process_sber_payment(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
@@ -128,7 +129,6 @@ async def process_sber_payment(callback: types.CallbackQuery, state: FSMContext)
 async def payment_done_check(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
-    # Уведомляем пользователя
     await callback.message.edit_text(
         "⏳ **Ваша заявка отправлена на проверку!**\n"
         "Менеджер проверит поступление средств и начислит звезды в течение нескольких минут.",
@@ -136,7 +136,6 @@ async def payment_done_check(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="Markdown"
     )
     
-    # Отправляем админу сообщение для подтверждения
     admin_text = (
         f"🔔 **Новая заявка на оплату (Сбербанк)!**\n\n"
         f"Пользователь: @{callback.from_user.username} (ID: {callback.from_user.id})\n"
@@ -150,7 +149,6 @@ async def payment_done_check(callback: types.CallbackQuery, state: FSMContext):
         await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
     except Exception as e:
         logging.error(f"Не удалось отправить уведомление админу: {e}")
-        # Отправляем сообщение пользователю, что произошла ошибка
         await callback.message.answer(
             "⚠️ Произошла ошибка при отправке уведомления. Пожалуйста, сообщите администратору. @fyhjollyy",
             reply_markup=main_menu_kb()
@@ -158,9 +156,23 @@ async def payment_done_check(callback: types.CallbackQuery, state: FSMContext):
     
     await state.clear()
 
+@dp.callback_query(F.data.in_(["premium", "ton", "profile"]))
+async def placeholder_buttons(callback: types.CallbackQuery):
+    """Заглушка для нереализованных кнопок"""
+    await callback.answer("🚧 Этот раздел в разработке", show_alert=True)
+
 async def main():
-    logging.basicConfig(level=logging.INFO)
-    await dp.start_polling(bot)
+    logging.info("Запуск бота...")
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        logging.error(f"Ошибка при запуске бота: {e}")
+        raise
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Бот остановлен вручную")
+    except Exception as e:
+        logging.error(f"Критическая ошибка: {e}")
