@@ -1,338 +1,166 @@
-import asyncio
 import logging
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery
+import asyncio
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import BOT_TOKEN
-from keyboards import (
-    main_menu_kb,
-    recipient_kb,
-    stars_amount_kb,
-    payment_method_kb,
-    confirm_kb,
-    cancel_kb,
-)
+# Токен твоего бота (получи у @BotFather)
+BOT_TOKEN = "8611742410:AAHcNxvVvoCe7uEfv3POaw60hT6y0JpEHwA"
+# ID администратора, которому будут приходить уведомления о новых оплатах по номеру
+# Обновленный ID супергруппы (из ошибки: -1003792567158)
+ADMIN_ID = -1003792567158
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Реквизиты для оплаты
+PAYMENT_PHONE = "+7 (901) 653-44-21"
+PAYMENT_BANK = "Сбербанк (Лиза Ш.)"
 
 bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+dp = Dispatcher()
 
-
-class BuyStarsFlow(StatesGroup):
-    waiting_for_recipient = State()
+# Состояния для оформления заказа
+class OrderState(StatesGroup):
+    waiting_for_username = State()
     waiting_for_amount = State()
-    waiting_for_custom_amount = State()
-    waiting_for_payment = State()
-    confirming = State()
+    waiting_for_payment_confirm = State()
 
+# --- КЛАВИАТУРЫ ---
 
-STAR_PRICES = {
-    50: 59,
-    100: 119,
-    150: 178,
-    250: 297,
-    350: 416,
-    500: 595,
-    750: 892,
-    1000: 1190,
-    1500: 1785,
-    2500: 2975,
-    5000: 5950,
-    10000: 11900,
-}
+def main_menu_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="⭐ Купить звезды", callback_data="buy_stars"))
+    builder.row(
+        types.InlineKeyboardButton(text="🎁 Premium", callback_data="premium"),
+        types.InlineKeyboardButton(text="💎 TON", callback_data="ton")
+    )
+    builder.row(types.InlineKeyboardButton(text="👤 Профиль", callback_data="profile"))
+    return builder.as_markup()
 
-PAYMENT_METHODS = {
-    "sbp_1": ("СБП [1]", 6.0),
-    "sbp": ("СБП", 8.0),
-    "card": ("Карта", 8.0),
-    "cryptobot": ("CryptoBot", 3.0),
-    "ton": ("TON", 0.0),
-    "lolzteam": ("LolzTeam", 4.0),
-    "usdt": ("USDT (TON)", 0.0),
-}
+def amount_kb():
+    builder = InlineKeyboardBuilder()
+    amounts = [50, 100, 150, 250, 500, 1000]
+    for amt in amounts:
+        price = int(amt * 1.18)
+        builder.button(text=f"⭐ {amt} ({price}₽)", callback_data=f"amt_{amt}_{price}")
+    builder.adjust(2)
+    builder.row(types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    return builder.as_markup()
 
+def payment_methods_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="💚 Сбербанк / СБП (По номеру) • 0%", callback_data="pay_sber"))
+    builder.row(types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    return builder.as_markup()
 
-# ─── /start ────────────────────────────────────────────────────────────────────
+def confirm_payment_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="✅ Я оплатил(а)", callback_data="payment_done"))
+    builder.row(types.InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    return builder.as_markup()
+
+# --- ХЕНДЛЕРЫ ---
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer_photo(
-        photo="https://i.imgur.com/placeholder_main.jpg",  # замените на свой баннер
-        caption=(
-            "✨ *Добро пожаловать!*\n\n"
-            "🎁 Покупайте Звёзды, Premium и пополняйте баланс за пару кликов.\n\n"
-            "📦 Выдача товаров моментальна!"
-        ),
-        parse_mode="Markdown",
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "👋 **Добро пожаловать!**\n\n"
+        "🚀 Покупайте Звезды, Premium и пополняйте баланс за пару кликов.\n"
+        "🎁 Выдача товаров моментальна!",
         reply_markup=main_menu_kb(),
+        parse_mode="Markdown"
     )
 
-
-# ─── Главное меню ──────────────────────────────────────────────────────────────
+@dp.callback_query(F.data == "cancel")
+async def cancel_action(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Действие отменено.", reply_markup=main_menu_kb())
 
 @dp.callback_query(F.data == "buy_stars")
-async def buy_stars_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BuyStarsFlow.waiting_for_recipient)
-    await callback.message.edit_caption(
-        caption=(
-            "✈️ Введите юзернейм кому отправить звёзды\n"
-            "*(пример: @username)*:"
-        ),
-        parse_mode="Markdown",
-        reply_markup=recipient_kb(),
+async def start_buy_stars(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "✈️ **Введите юзернейм**, кому отправить звезды (пример: @username):",
+        parse_mode="Markdown"
     )
-    await callback.answer()
+    await state.set_state(OrderState.waiting_for_username)
 
-
-@dp.callback_query(F.data == "buy_premium")
-async def buy_premium(callback: CallbackQuery):
-    await callback.answer("🔜 Раздел Premium скоро будет доступен!", show_alert=True)
-
-
-@dp.callback_query(F.data == "buy_ton")
-async def buy_ton(callback: CallbackQuery):
-    await callback.answer("🔜 Раздел TON скоро будет доступен!", show_alert=True)
-
-
-@dp.callback_query(F.data == "buy_gift")
-async def buy_gift(callback: CallbackQuery):
-    await callback.answer("🔜 Раздел подарков скоро будет доступен!", show_alert=True)
-
-
-@dp.callback_query(F.data == "weekly_raffle")
-async def weekly_raffle(callback: CallbackQuery):
-    await callback.answer("🎰 Еженедельный розыгрыш скоро!", show_alert=True)
-
-
-@dp.callback_query(F.data == "create_check")
-async def create_check(callback: CallbackQuery):
-    await callback.answer("🧾 Функция чека скоро будет доступна!", show_alert=True)
-
-
-@dp.callback_query(F.data == "profile")
-async def profile(callback: CallbackQuery):
-    user = callback.from_user
-    await callback.message.edit_caption(
-        caption=(
-            f"👤 *Профиль*\n\n"
-            f"🆔 ID: `{user.id}`\n"
-            f"👤 Имя: {user.full_name}\n"
-            f"📛 Username: @{user.username or '—'}"
-        ),
-        parse_mode="Markdown",
-        reply_markup=cancel_kb("main_menu"),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "support")
-async def support(callback: CallbackQuery):
-    await callback.answer("💬 Поддержка: @support (замените на реальный контакт)", show_alert=True)
-
-
-@dp.callback_query(F.data == "main_menu")
-async def back_to_main(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_caption(
-        caption=(
-            "✨ *Добро пожаловать!*\n\n"
-            "🎁 Покупайте Звёзды, Premium и пополняйте баланс за пару кликов.\n\n"
-            "📦 Выдача товаров моментальна!"
-        ),
-        parse_mode="Markdown",
-        reply_markup=main_menu_kb(),
-    )
-    await callback.answer()
-
-
-# ─── Получатель ────────────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data == "recipient_self", BuyStarsFlow.waiting_for_recipient)
-async def recipient_self(callback: CallbackQuery, state: FSMContext):
-    username = f"@{callback.from_user.username}" if callback.from_user.username else f"ID:{callback.from_user.id}"
-    await state.update_data(recipient=username)
-    await _show_star_amounts(callback, state, username)
-
-
-@dp.message(BuyStarsFlow.waiting_for_recipient)
-async def recipient_entered(message: Message, state: FSMContext):
+@dp.message(OrderState.waiting_for_username)
+async def process_username(message: types.Message, state: FSMContext):
     username = message.text.strip()
     if not username.startswith("@"):
         username = "@" + username
-    await state.update_data(recipient=username)
+    
+    await state.update_data(target_user=username)
+    await message.answer("🔍 Выберите кол-во звезд для покупки:", reply_markup=amount_kb())
+    await state.set_state(OrderState.waiting_for_amount)
 
-    # отправляем новое сообщение с выбором количества
-    sent = await message.answer_photo(
-        photo="https://i.imgur.com/placeholder_stars.jpg",
-        caption=_stars_caption(username),
-        parse_mode="Markdown",
-        reply_markup=stars_amount_kb(),
-    )
-    await state.update_data(bot_msg_id=sent.message_id)
-    await state.set_state(BuyStarsFlow.waiting_for_amount)
-
-
-async def _show_star_amounts(callback: CallbackQuery, state: FSMContext, username: str):
-    await state.set_state(BuyStarsFlow.waiting_for_amount)
-    await callback.message.edit_caption(
-        caption=_stars_caption(username),
-        parse_mode="Markdown",
-        reply_markup=stars_amount_kb(),
-    )
-    await callback.answer()
-
-
-def _stars_caption(username: str) -> str:
-    return (
-        f"👤 Получатель: *{username}*\n\n"
-        "🌟 Выберите кол-во звёзд для покупки или укажите своё:"
-    )
-
-
-# ─── Количество звёзд ──────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data.startswith("stars_"), BuyStarsFlow.waiting_for_amount)
-async def stars_selected(callback: CallbackQuery, state: FSMContext):
-    amount = int(callback.data.replace("stars_", ""))
+@dp.callback_query(OrderState.waiting_for_amount, F.data.startswith("amt_"))
+async def process_amount(callback: types.CallbackQuery, state: FSMContext):
+    _, amt, price = callback.data.split("_")
+    await state.update_data(amount=amt, price=price)
+    
     data = await state.get_data()
-    recipient = data["recipient"]
-    price = STAR_PRICES[amount]
-
-    await state.update_data(amount=amount, price=price)
-    await state.set_state(BuyStarsFlow.waiting_for_payment)
-
-    await callback.message.edit_caption(
-        caption=(
-            f"Вы покупаете *{amount}* ⭐ для *{recipient}*\n\n"
-            "💳 Выберите счёт для оплаты:"
-        ),
-        parse_mode="Markdown",
-        reply_markup=payment_method_kb(),
+    await callback.message.edit_text(
+        f"Вы покупаете **{amt} ⭐** для {data['target_user']}\n\n"
+        f"💰 Выберите счет для оплаты:",
+        reply_markup=payment_methods_kb(),
+        parse_mode="Markdown"
     )
-    await callback.answer()
 
-
-@dp.callback_query(F.data == "custom_amount", BuyStarsFlow.waiting_for_amount)
-async def custom_amount(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BuyStarsFlow.waiting_for_custom_amount)
-    await callback.message.edit_caption(
-        caption="✏️ Введите нужное количество звёзд (минимум 50):",
-        reply_markup=cancel_kb("main_menu"),
-    )
-    await callback.answer()
-
-
-@dp.message(BuyStarsFlow.waiting_for_custom_amount)
-async def custom_amount_entered(message: Message, state: FSMContext):
-    try:
-        amount = int(message.text.strip())
-        if amount < 50:
-            await message.answer("❌ Минимум 50 звёзд. Введите другое число:")
-            return
-    except ValueError:
-        await message.answer("❌ Введите корректное число:")
-        return
-
-    # считаем цену (~1.19 руб за звезду)
-    price = round(amount * 1.19)
+@dp.callback_query(OrderState.waiting_for_amount, F.data == "pay_sber")
+async def process_sber_payment(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    recipient = data["recipient"]
-
-    await state.update_data(amount=amount, price=price)
-    await state.set_state(BuyStarsFlow.waiting_for_payment)
-
-    await message.answer_photo(
-        photo="https://i.imgur.com/placeholder_stars.jpg",
-        caption=(
-            f"Вы покупаете *{amount}* ⭐ для *{recipient}*\n\n"
-            "💳 Выберите счёт для оплаты:"
-        ),
-        parse_mode="Markdown",
-        reply_markup=payment_method_kb(),
+    
+    text = (
+        f"💳 **Счет на оплату по номеру**\n\n"
+        f"👤 Получатель: {data['target_user']}\n"
+        f"📦 Товар: {data['amount']} ⭐\n"
+        f"💵 Сумма: **{data['price']} ₽**\n\n"
+        f"--- РЕКВИЗИТЫ ДЛЯ ПЕРЕВОДА ---\n"
+        f"📱 Номер: `{PAYMENT_PHONE}`\n"
+        f"🏦 Банк: {PAYMENT_BANK}\n\n"
+        f"⚠️ Переведите точную сумму. После перевода нажмите кнопку ниже."
     )
+    await callback.message.edit_text(text, reply_markup=confirm_payment_kb(), parse_mode="Markdown")
+    await state.set_state(OrderState.waiting_for_payment_confirm)
 
-
-# ─── Способ оплаты ─────────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data.startswith("pay_"), BuyStarsFlow.waiting_for_payment)
-async def payment_selected(callback: CallbackQuery, state: FSMContext):
-    method_key = callback.data.replace("pay_", "")
-    method_name, fee_pct = PAYMENT_METHODS[method_key]
+@dp.callback_query(OrderState.waiting_for_payment_confirm, F.data == "payment_done")
+async def payment_done_check(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-
-    amount = data["amount"]
-    base_price = data["price"]
-    recipient = data["recipient"]
-    final_price = round(base_price * (1 + fee_pct / 100), 2)
-
-    await state.update_data(method=method_name, final_price=final_price)
-    await state.set_state(BuyStarsFlow.confirming)
-
-    await callback.message.edit_caption(
-        caption=(
-            f"🔒 *Счёт {method_name}*\n\n"
-            f"👤 Получатель: *{recipient}*\n"
-            f"🎁 Товар: *{amount}* ⭐\n"
-            f"💰 Сумма: *{final_price}₽*\n\n"
-            "❗ После успешной оплаты бот автоматически обработает ваш заказ"
-        ),
-        parse_mode="Markdown",
-        reply_markup=confirm_kb(),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "confirm_pay", BuyStarsFlow.confirming)
-async def confirm_payment(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    # TODO: здесь интеграция с реальным платёжным шлюзом
-    await callback.answer("✅ Заказ принят! (тестовый режим)", show_alert=True)
-    await state.clear()
-
-    await callback.message.edit_caption(
-        caption=(
-            "✅ *Заказ успешно создан!*\n\n"
-            f"⭐ {data['amount']} звёзд для {data['recipient']}\n"
-            f"💳 Способ оплаты: {data['method']}\n"
-            f"💰 Сумма: {data['final_price']}₽\n\n"
-            "📦 Выдача будет произведена автоматически после оплаты."
-        ),
-        parse_mode="Markdown",
-        reply_markup=cancel_kb("main_menu"),
-    )
-
-
-# ─── Отмена ────────────────────────────────────────────────────────────────────
-
-@dp.callback_query(F.data == "cancel")
-async def cancel_action(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_caption(
-        caption=(
-            "✨ *Добро пожаловать!*\n\n"
-            "🎁 Покупайте Звёзды, Premium и пополняйте баланс за пару кликов.\n\n"
-            "📦 Выдача товаров моментальна!"
-        ),
-        parse_mode="Markdown",
+    
+    # Уведомляем пользователя
+    await callback.message.edit_text(
+        "⏳ **Ваша заявка отправлена на проверку!**\n"
+        "Менеджер проверит поступление средств и начислит звезды в течение нескольких минут.",
         reply_markup=main_menu_kb(),
+        parse_mode="Markdown"
     )
-    await callback.answer("❌ Отменено")
-
-
-# ─── Запуск ────────────────────────────────────────────────────────────────────
+    
+    # Отправляем админу сообщение для подтверждения
+    admin_text = (
+        f"🔔 **Новая заявка на оплату (Сбербанк)!**\n\n"
+        f"Пользователь: @{callback.from_user.username} (ID: {callback.from_user.id})\n"
+        f"Кому звезды: {data['target_user']}\n"
+        f"Количество: {data['amount']} ⭐\n"
+        f"Сумма к получению: {data['price']} ₽\n\n"
+        f"Проверьте банк на наличие перевода!"
+    )
+    
+    try:
+        await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление админу: {e}")
+        # Отправляем сообщение пользователю, что произошла ошибка
+        await callback.message.answer(
+            "⚠️ Произошла ошибка при отправке уведомления. Пожалуйста, сообщите администратору. @fyhjollyy",
+            reply_markup=main_menu_kb()
+        )
+    
+    await state.clear()
 
 async def main():
-    logger.info("Бот запущен ✅")
-    await dp.start_polling(bot, skip_updates=True)
-
+    logging.basicConfig(level=logging.INFO)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
